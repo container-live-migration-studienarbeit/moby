@@ -511,7 +511,7 @@ func (c *client) Status(ctx context.Context, containerID string) (containerd.Pro
 	return s.Status, nil
 }
 
-func (c *client) getCheckpointOptions(id string, exit bool) containerd.CheckpointTaskOpts {
+func (c *client) getCheckpointOptions(id string, exit bool, preDump bool) containerd.CheckpointTaskOpts {
 	return func(r *containerd.CheckpointTaskInfo) error {
 		if r.Options == nil {
 			c.v2runcoptionsMu.Lock()
@@ -519,9 +519,15 @@ func (c *client) getCheckpointOptions(id string, exit bool) containerd.Checkpoin
 			c.v2runcoptionsMu.Unlock()
 
 			if isV2 {
-				r.Options = &v2runcoptions.CheckpointOptions{Exit: exit}
+				r.Options = &v2runcoptions.CheckpointOptions{
+					Exit:    exit,
+					PreDump: preDump,
+				}
 			} else {
-				r.Options = &runctypes.CheckpointOptions{Exit: exit}
+				r.Options = &runctypes.CheckpointOptions{
+					Exit:    exit,
+					PreDump: preDump,
+				}
 			}
 			return nil
 		}
@@ -529,21 +535,23 @@ func (c *client) getCheckpointOptions(id string, exit bool) containerd.Checkpoin
 		switch opts := r.Options.(type) {
 		case *v2runcoptions.CheckpointOptions:
 			opts.Exit = exit
+			opts.PreDump = preDump
 		case *runctypes.CheckpointOptions:
 			opts.Exit = exit
+			opts.PreDump = preDump
 		}
 
 		return nil
 	}
 }
 
-func (c *client) CreateCheckpoint(ctx context.Context, containerID, checkpointDir string, exit bool) error {
+func (c *client) CreateCheckpoint(ctx context.Context, containerID, checkpointDir string, exit bool, preDump bool) error {
 	p, err := c.getProcess(ctx, containerID, libcontainerdtypes.InitProcessName)
 	if err != nil {
 		return err
 	}
 
-	opts := []containerd.CheckpointTaskOpts{c.getCheckpointOptions(containerID, exit)}
+	opts := []containerd.CheckpointTaskOpts{c.getCheckpointOptions(containerID, exit, preDump)}
 	img, err := p.(containerd.Task).Checkpoint(ctx, opts...)
 	if err != nil {
 		return wrapError(err)

@@ -3,6 +3,7 @@ package checkpoint // import "github.com/docker/docker/api/server/router/checkpo
 import (
 	"context"
 	"encoding/json"
+	"io/ioutil"
 	"net/http"
 
 	"github.com/docker/docker/api/server/httputils"
@@ -18,11 +19,20 @@ func (s *checkpointRouter) postContainerCheckpoint(ctx context.Context, w http.R
 
 	decoder := json.NewDecoder(r.Body)
 	if err := decoder.Decode(&options); err != nil {
+		b, err := ioutil.ReadAll(r.Body)
+		if err != nil {
+			return err
+		}
+		defer r.Body.Close()
+		println("ERROR in configuration")
+		println(string(b))
 		return err
 	}
 
 	err := s.backend.CheckpointCreate(vars["name"], options)
 	if err != nil {
+		println("ERROR in checkpointing")
+		println(err.Error())
 		return err
 	}
 
