@@ -511,7 +511,7 @@ func (c *client) Status(ctx context.Context, containerID string) (containerd.Pro
 	return s.Status, nil
 }
 
-func (c *client) getCheckpointOptions(id string, exit bool, preDump bool) containerd.CheckpointTaskOpts {
+func (c *client) getCheckpointOptions(id string, checkpointDir string, exit bool, preDump bool) containerd.CheckpointTaskOpts {
 	return func(r *containerd.CheckpointTaskInfo) error {
 		if r.Options == nil {
 			c.v2runcoptionsMu.Lock()
@@ -522,11 +522,13 @@ func (c *client) getCheckpointOptions(id string, exit bool, preDump bool) contai
 				r.Options = &v2runcoptions.CheckpointOptions{
 					Exit:    exit,
 					PreDump: preDump,
+					WorkPath: checkpointDir,
 				}
 			} else {
 				r.Options = &runctypes.CheckpointOptions{
 					Exit:    exit,
 					PreDump: preDump,
+					WorkPath: checkpointDir,
 				}
 			}
 			return nil
@@ -551,7 +553,7 @@ func (c *client) CreateCheckpoint(ctx context.Context, containerID, checkpointDi
 		return err
 	}
 
-	opts := []containerd.CheckpointTaskOpts{c.getCheckpointOptions(containerID, exit, preDump)}
+	opts := []containerd.CheckpointTaskOpts{c.getCheckpointOptions(containerID, checkpointDir, exit, preDump)}
 	img, err := p.(containerd.Task).Checkpoint(ctx, opts...)
 	if err != nil {
 		return wrapError(err)
