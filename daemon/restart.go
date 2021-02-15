@@ -74,7 +74,7 @@ func (daemon *Daemon) containerRestart(container *container.Container, seconds i
 		}
 	}
 
-	if err := daemon.containerStart(container, "", "", true); err != nil {
+	if err := daemon.containerStart(container, "", "", false, "", true); err != nil {
 		return err
 	}
 

@@ -39,7 +39,7 @@ type stateBackend interface {
 	ContainerResize(name string, height, width int) error
 	ContainerRestart(name string, seconds *int) error
 	ContainerRm(name string, config *types.ContainerRmConfig) error
-	ContainerStart(name string, hostConfig *container.HostConfig, checkpoint string, checkpointDir string) error
+	ContainerStart(name string, hostConfig *container.HostConfig, checkpoint string, checkpointDir string, lazyMigration bool, pageServer string) error
 	ContainerStop(name string, seconds *int) error
 	ContainerUnpause(name string) error
 	ContainerUpdate(name string, hostConfig *container.HostConfig) (container.ContainerUpdateOKBody, error)

@@ -50,7 +50,7 @@ func (m *MockBackend) ContainerKill(containerID string, sig uint64) error {
 	return nil
 }
 
-func (m *MockBackend) ContainerStart(containerID string, hostConfig *container.HostConfig, checkpoint string, checkpointDir string) error {
+func (m *MockBackend) ContainerStart(containerID string, hostConfig *container.HostConfig, checkpoint string, checkpointDir string, lazyMigration bool, pageServer string) error {
 	return nil
 }
 

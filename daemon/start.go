@@ -14,7 +14,7 @@ import (
 )
 
 // ContainerStart starts a container.
-func (daemon *Daemon) ContainerStart(name string, hostConfig *containertypes.HostConfig, checkpoint string, checkpointDir string) error {
+func (daemon *Daemon) ContainerStart(name string, hostConfig *containertypes.HostConfig, checkpoint string, checkpointDir string, lazyMigration bool, pageServer string) error {
 	if checkpoint != "" && !daemon.HasExperimental() {
 		return errdefs.InvalidParameter(errors.New("checkpoint is only supported in experimental mode"))
 	}
@@ -91,14 +91,14 @@ func (daemon *Daemon) ContainerStart(name string, hostConfig *containertypes.Hos
 			return errdefs.InvalidParameter(err)
 		}
 	}
-	return daemon.containerStart(ctr, checkpoint, checkpointDir, true)
+	return daemon.containerStart(ctr, checkpoint, checkpointDir, lazyMigration, pageServer, true)
 }
 
 // containerStart prepares the container to run by setting up everything the
 // container needs, such as storage and networking, as well as links
 // between containers. The container is left waiting for a signal to
 // begin running.
-func (daemon *Daemon) containerStart(container *container.Container, checkpoint string, checkpointDir string, resetRestartManager bool) (err error) {
+func (daemon *Daemon) containerStart(container *container.Container, checkpoint string, checkpointDir string, lazyMigration bool, pageServer string, resetRestartManager bool) (err error) {
 	start := time.Now()
 	container.Lock()
 	defer container.Unlock()
@@ -196,6 +196,7 @@ func (daemon *Daemon) containerStart(container *container.Container, checkpoint 
 
 	// TODO(mlaventure): we need to specify checkpoint options here
 	pid, err := daemon.containerd.Start(context.Background(), container.ID, checkpointDir,
+		lazyMigration, pageServer,
 		container.StreamConfig.Stdin() != nil || container.Config.Tty,
 		container.InitializeStdio)
 	if err != nil {

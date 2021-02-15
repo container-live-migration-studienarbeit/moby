@@ -14,8 +14,10 @@ import (
 type CheckpointCreateOptions struct {
 	CheckpointID  string
 	CheckpointDir string
-	PreDump		  bool
+	PreDump       bool
 	Exit          bool
+	LazyMigration bool
+	PageServer    string
 }
 
 // CheckpointListOptions holds parameters to list checkpoints for a container

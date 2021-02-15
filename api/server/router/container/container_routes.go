@@ -207,7 +207,9 @@ func (s *containerRouter) postContainersStart(ctx context.Context, w http.Respon
 
 	checkpoint := r.Form.Get("checkpoint")
 	checkpointDir := r.Form.Get("checkpoint-dir")
-	if err := s.backend.ContainerStart(vars["name"], hostConfig, checkpoint, checkpointDir); err != nil {
+	lazyMigration := r.Form.Get("lazy-migration")
+	pageServer := r.Form.Get("page-server")
+	if err := s.backend.ContainerStart(vars["name"], hostConfig, checkpoint, checkpointDir, lazyMigration == "true", pageServer); err != nil {
 		return err
 	}
 

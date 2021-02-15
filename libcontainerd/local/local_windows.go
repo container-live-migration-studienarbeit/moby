@@ -1230,7 +1230,7 @@ func (c *client) UpdateResources(ctx context.Context, containerID string, resour
 	return nil
 }
 
-func (c *client) CreateCheckpoint(ctx context.Context, containerID, checkpointDir string, exit bool, preDump bool) error {
+func (c *client) CreateCheckpoint(ctx context.Context, containerID, checkpointDir string, exit bool, preDump bool, lazyMigration bool, pageServer string) error {
 	return errors.New("Windows: Containers do not support checkpoints")
 }
 

@@ -154,7 +154,7 @@ func (c *client) Create(ctx context.Context, id string, ociSpec *specs.Spec, shi
 }
 
 // Start create and start a task for the specified containerd id
-func (c *client) Start(ctx context.Context, id, checkpointDir string, withStdin bool, attachStdio libcontainerdtypes.StdioCallback) (int, error) {
+func (c *client) Start(ctx context.Context, id, checkpointDir string, lazyMigration bool, pageServer string, withStdin bool, attachStdio libcontainerdtypes.StdioCallback) (int, error) {
 	ctr, err := c.getContainer(ctx, id)
 	if err != nil {
 		return -1, err
@@ -216,12 +216,16 @@ func (c *client) Start(ctx context.Context, id, checkpointDir string, withStdin 
 			if ok {
 				opts.IoUid = uint32(uid)
 				opts.IoGid = uint32(gid)
+				opts.LazyMigration = lazyMigration
+				opts.CriuPageServer = pageServer
 				info.Options = &opts
 			} else {
 				info.Options = &runctypes.CreateOptions{
-					IoUid:       uint32(uid),
-					IoGid:       uint32(gid),
-					NoPivotRoot: os.Getenv("DOCKER_RAMDISK") != "",
+					IoUid:         uint32(uid),
+					IoGid:         uint32(gid),
+					NoPivotRoot:   os.Getenv("DOCKER_RAMDISK") != "",
+					LazyMigration: lazyMigration,
+					PageServer:    pageServer,
 				}
 			}
 			return nil
@@ -511,7 +515,7 @@ func (c *client) Status(ctx context.Context, containerID string) (containerd.Pro
 	return s.Status, nil
 }
 
-func (c *client) getCheckpointOptions(id string, checkpointDir string, exit bool, preDump bool) containerd.CheckpointTaskOpts {
+func (c *client) getCheckpointOptions(id string, checkpointDir string, exit bool, preDump bool, lazyMigration bool, pageServer string) containerd.CheckpointTaskOpts {
 	return func(r *containerd.CheckpointTaskInfo) error {
 		if r.Options == nil {
 			c.v2runcoptionsMu.Lock()
@@ -520,15 +524,19 @@ func (c *client) getCheckpointOptions(id string, checkpointDir string, exit bool
 
 			if isV2 {
 				r.Options = &v2runcoptions.CheckpointOptions{
-					Exit:    exit,
-					PreDump: preDump,
-					WorkPath: checkpointDir,
+					Exit:           exit,
+					PreDump:        preDump,
+					LazyMigration:  lazyMigration,
+					CriuPageServer: pageServer,
+					WorkPath:       checkpointDir,
 				}
 			} else {
 				r.Options = &runctypes.CheckpointOptions{
-					Exit:    exit,
-					PreDump: preDump,
-					WorkPath: checkpointDir,
+					Exit:           exit,
+					PreDump:        preDump,
+					LazyMigration:  lazyMigration,
+					CriuPageServer: pageServer,
+					WorkPath:       checkpointDir,
 				}
 			}
 			return nil
@@ -538,22 +546,26 @@ func (c *client) getCheckpointOptions(id string, checkpointDir string, exit bool
 		case *v2runcoptions.CheckpointOptions:
 			opts.Exit = exit
 			opts.PreDump = preDump
+			opts.LazyMigration = lazyMigration
+			opts.CriuPageServer = pageServer
 		case *runctypes.CheckpointOptions:
 			opts.Exit = exit
 			opts.PreDump = preDump
+			opts.LazyMigration = lazyMigration
+			opts.CriuPageServer = pageServer
 		}
 
 		return nil
 	}
 }
 
-func (c *client) CreateCheckpoint(ctx context.Context, containerID, checkpointDir string, exit bool, preDump bool) error {
+func (c *client) CreateCheckpoint(ctx context.Context, containerID, checkpointDir string, exit bool, preDump bool, lazyMigration bool, pageServer string) error {
 	p, err := c.getProcess(ctx, containerID, libcontainerdtypes.InitProcessName)
 	if err != nil {
 		return err
 	}
 
-	opts := []containerd.CheckpointTaskOpts{c.getCheckpointOptions(containerID, checkpointDir, exit, preDump)}
+	opts := []containerd.CheckpointTaskOpts{c.getCheckpointOptions(containerID, checkpointDir, exit, preDump, lazyMigration, pageServer)}
 	img, err := p.(containerd.Task).Checkpoint(ctx, opts...)
 	if err != nil {
 		return wrapError(err)

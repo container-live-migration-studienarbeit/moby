@@ -89,7 +89,7 @@ func (e *Executor) Create(id string, spec specs.Spec, stdout, stderr io.WriteClo
 		}
 	}
 
-	_, err = e.client.Start(ctx, id, "", false, attachStreamsFunc(stdout, stderr))
+	_, err = e.client.Start(ctx, id, "", false, "", false, attachStreamsFunc(stdout, stderr))
 	if err != nil {
 		deleteTaskAndContainer(ctx, e.client, id, nil)
 	}

@@ -69,7 +69,7 @@ func (c *containerManager) Run(ctx context.Context, cID string, stdout, stderr i
 		}
 	}()
 
-	if err := c.backend.ContainerStart(cID, nil, "", ""); err != nil {
+	if err := c.backend.ContainerStart(cID, nil, "", "", false, ""); err != nil {
 		close(finished)
 		logCancellationError(cancelErrCh, "error from ContainerStart: "+err.Error())
 		return err
