@@ -218,6 +218,7 @@ func (c *client) Start(ctx context.Context, id, checkpointDir string, lazyMigrat
 				opts.IoGid = uint32(gid)
 				opts.LazyMigration = lazyMigration
 				opts.CriuPageServer = pageServer
+				opts.CriuImagePath = checkpointDir
 				info.Options = &opts
 			} else {
 				info.Options = &runctypes.CreateOptions{
@@ -226,6 +227,7 @@ func (c *client) Start(ctx context.Context, id, checkpointDir string, lazyMigrat
 					NoPivotRoot:   os.Getenv("DOCKER_RAMDISK") != "",
 					LazyMigration: lazyMigration,
 					PageServer:    pageServer,
+					CriuImagePath: checkpointDir,
 				}
 			}
 			return nil
