@@ -53,7 +53,7 @@ type Client interface {
 	Restore(ctx context.Context, containerID string, attachStdio StdioCallback) (alive bool, pid int, p Process, err error)
 
 	Create(ctx context.Context, containerID string, spec *specs.Spec, shim string, runtimeOptions interface{}, opts ...containerd.NewContainerOpts) error
-	Start(ctx context.Context, containerID, checkpointDir string, lazyMigration bool, pageServer string, withStdin bool, attachStdio StdioCallback) (pid int, err error)
+	Start(ctx context.Context, containerID, checkpointDir string, lazyMigration bool, pageServer string, rwLayerDir string, withStdin bool, attachStdio StdioCallback) (pid int, err error)
 	SignalProcess(ctx context.Context, containerID, processID string, signal int) error
 	Exec(ctx context.Context, containerID, processID string, spec *specs.Process, withStdin bool, attachStdio StdioCallback) (int, error)
 	ResizeTerminal(ctx context.Context, containerID, processID string, width, height int) error
@@ -68,7 +68,7 @@ type Client interface {
 	Status(ctx context.Context, containerID string) (containerd.ProcessStatus, error)
 
 	UpdateResources(ctx context.Context, containerID string, resources *Resources) error
-	CreateCheckpoint(ctx context.Context, containerID, checkpointDir string, exit, preDump bool, lazyMigration bool, pageServer string) error
+	CreateCheckpoint(ctx context.Context, containerID, checkpointDir string, exit, preDump bool, lazyMigration bool, pageServer string, rwLayerDir string) error
 }
 
 // StdioCallback is called to connect a container or process stdio.

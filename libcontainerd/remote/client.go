@@ -3,8 +3,10 @@ package remote // import "github.com/docker/docker/libcontainerd/remote"
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -29,6 +31,7 @@ import (
 	"github.com/docker/docker/libcontainerd/queue"
 	libcontainerdtypes "github.com/docker/docker/libcontainerd/types"
 	"github.com/docker/docker/pkg/ioutils"
+	"github.com/docker/swarmkit/log"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/pkg/errors"
@@ -154,7 +157,7 @@ func (c *client) Create(ctx context.Context, id string, ociSpec *specs.Spec, shi
 }
 
 // Start create and start a task for the specified containerd id
-func (c *client) Start(ctx context.Context, id, checkpointDir string, lazyMigration bool, pageServer string, withStdin bool, attachStdio libcontainerdtypes.StdioCallback) (int, error) {
+func (c *client) Start(ctx context.Context, id, checkpointDir string, lazyMigration bool, pageServer string, rwLayerDir string, withStdin bool, attachStdio libcontainerdtypes.StdioCallback) (int, error) {
 	ctr, err := c.getContainer(ctx, id)
 	if err != nil {
 		return -1, err
@@ -188,6 +191,29 @@ func (c *client) Start(ctx context.Context, id, checkpointDir string, lazyMigrat
 		if err != nil {
 			return -1, errors.Wrapf(err, "failed to upload checkpoint to containerd")
 		}
+
+		// NOTE: Docker handles the `rwlayer.tar.gz` unpacking for now (similar logic can also be found in `containerd`).
+		// There is some opaque copy logic going on here, so this solution is a comprimise between development speed and maintainability.
+		// This could be replaced by properly unpacking the `rwlayer.tar.gz` from the container checkpoint to the target's `UpperDir`.
+		if rwLayerDir != "" {
+			archiveOrigin := filepath.Join(checkpointDir, "rwlayer.tar.gz")
+			cmd := exec.Command("tar", []string{"--strip-components", "1", "-xvf", archiveOrigin, "-C", rwLayerDir}...)
+
+			if cerr := cmd.Start(); cerr != nil {
+				log.G(ctx).Error(errors.Wrap(cerr, "Failed to start `tar` command"))
+			} else {
+				if cerr := cmd.Wait(); cerr != nil {
+					if exiterr, ok := err.(*exec.ExitError); ok {
+						if status, ok := exiterr.Sys().(syscall.WaitStatus); ok {
+							log.G(ctx).Error(errors.Wrap(cerr,
+								fmt.Sprintf("`tar` exited with status %d", status.ExitStatus())))
+						}
+					} else {
+						log.G(ctx).Error(errors.Wrap(cerr, fmt.Sprintf("`tar` cmd.Wait: %v", err)))
+					}
+				}
+			}
+		}
 	}
 
 	spec, err := ctr.Spec(ctx)
@@ -218,7 +244,11 @@ func (c *client) Start(ctx context.Context, id, checkpointDir string, lazyMigrat
 				opts.IoGid = uint32(gid)
 				opts.LazyMigration = lazyMigration
 				opts.CriuPageServer = pageServer
+<<<<<<< HEAD
 				opts.CriuImagePath = checkpointDir
+=======
+				opts.RwLayerDir = ""
+>>>>>>> 40be4c325e... Introduce read_write layer persistance to checkpoints
 				info.Options = &opts
 			} else {
 				info.Options = &runctypes.CreateOptions{
@@ -227,7 +257,11 @@ func (c *client) Start(ctx context.Context, id, checkpointDir string, lazyMigrat
 					NoPivotRoot:   os.Getenv("DOCKER_RAMDISK") != "",
 					LazyMigration: lazyMigration,
 					PageServer:    pageServer,
+<<<<<<< HEAD
 					CriuImagePath: checkpointDir,
+=======
+					RwLayerDir:    "",
+>>>>>>> 40be4c325e... Introduce read_write layer persistance to checkpoints
 				}
 			}
 			return nil
@@ -517,7 +551,7 @@ func (c *client) Status(ctx context.Context, containerID string) (containerd.Pro
 	return s.Status, nil
 }
 
-func (c *client) getCheckpointOptions(id string, checkpointDir string, exit bool, preDump bool, lazyMigration bool, pageServer string) containerd.CheckpointTaskOpts {
+func (c *client) getCheckpointOptions(id string, checkpointDir string, exit bool, preDump bool, lazyMigration bool, pageServer string, rwLayerDir string) containerd.CheckpointTaskOpts {
 	return func(r *containerd.CheckpointTaskInfo) error {
 		if r.Options == nil {
 			c.v2runcoptionsMu.Lock()
@@ -530,6 +564,7 @@ func (c *client) getCheckpointOptions(id string, checkpointDir string, exit bool
 					PreDump:        preDump,
 					LazyMigration:  lazyMigration,
 					CriuPageServer: pageServer,
+					RwLayerDir:     rwLayerDir,
 					WorkPath:       checkpointDir,
 				}
 			} else {
@@ -538,6 +573,7 @@ func (c *client) getCheckpointOptions(id string, checkpointDir string, exit bool
 					PreDump:        preDump,
 					LazyMigration:  lazyMigration,
 					CriuPageServer: pageServer,
+					RwLayerDir:     rwLayerDir,
 					WorkPath:       checkpointDir,
 				}
 			}
@@ -550,28 +586,56 @@ func (c *client) getCheckpointOptions(id string, checkpointDir string, exit bool
 			opts.PreDump = preDump
 			opts.LazyMigration = lazyMigration
 			opts.CriuPageServer = pageServer
+			opts.RwLayerDir = rwLayerDir
 		case *runctypes.CheckpointOptions:
 			opts.Exit = exit
 			opts.PreDump = preDump
 			opts.LazyMigration = lazyMigration
 			opts.CriuPageServer = pageServer
+			opts.RwLayerDir = rwLayerDir
 		}
 
 		return nil
 	}
 }
 
-func (c *client) CreateCheckpoint(ctx context.Context, containerID, checkpointDir string, exit bool, preDump bool, lazyMigration bool, pageServer string) error {
+func (c *client) CreateCheckpoint(ctx context.Context, containerID, checkpointDir string, exit bool, preDump bool, lazyMigration bool, pageServer string, rwLayerDir string) error {
 	p, err := c.getProcess(ctx, containerID, libcontainerdtypes.InitProcessName)
 	if err != nil {
 		return err
 	}
 
-	opts := []containerd.CheckpointTaskOpts{c.getCheckpointOptions(containerID, checkpointDir, exit, preDump, lazyMigration, pageServer)}
+	opts := []containerd.CheckpointTaskOpts{c.getCheckpointOptions(containerID, checkpointDir, exit, preDump, lazyMigration, pageServer, rwLayerDir)}
 	img, err := p.(containerd.Task).Checkpoint(ctx, opts...)
 	if err != nil {
 		return wrapError(err)
 	}
+
+	// NOTE: Docker handles the `rwlayer.tar.gz` creation for now (similar logic can also be found in `containerd`).
+	// There is some opaque copy logic going on here, so this solution is a comprimise between development speed and maintainability.
+	// This could be replaced by properly copying the `rwlayer.tar.gz` from `containerd`'s working directory to the final checkpoint dir.
+	//
+	// Since we can not guarantee that the file system hasn't been modified between checkpointing and this code, we just do this
+	// if the container exits for sure.
+	if rwLayerDir != "" && exit {
+		cmd := exec.Command("tar", []string{"-C", rwLayerDir, "-zcvf", checkpointDir + "/" + "rwlayer.tar.gz", "./"}...)
+
+		if cerr := cmd.Start(); cerr != nil {
+			log.G(ctx).Error(errors.Wrap(cerr, "Failed to start `tar` command"))
+		} else {
+			if cerr := cmd.Wait(); cerr != nil {
+				if exiterr, ok := err.(*exec.ExitError); ok {
+					if status, ok := exiterr.Sys().(syscall.WaitStatus); ok {
+						log.G(ctx).Error(errors.Wrap(cerr,
+							fmt.Sprintf("`tar` exited with status %d", status.ExitStatus())))
+					}
+				} else {
+					log.G(ctx).Error(errors.Wrap(cerr, fmt.Sprintf("`tar` cmd.Wait: %v", err)))
+				}
+			}
+		}
+	}
+
 	// Whatever happens, delete the checkpoint from containerd
 	defer func() {
 		err := c.client.ImageService().Delete(context.Background(), img.Name())

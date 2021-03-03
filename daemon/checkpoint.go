@@ -71,7 +71,21 @@ func (daemon *Daemon) CheckpointCreate(name string, config types.CheckpointCreat
 		return fmt.Errorf("cannot checkpoint container %s: %s", name, err)
 	}
 
-	err = daemon.containerd.CreateCheckpoint(context.Background(), container.ID, checkpointDir, config.Exit, config.PreDump, config.LazyMigration, config.PageServer)
+	// Find out read-write layer location of container
+	rwLayer, err := daemon.imageService.GetLayerByID(container.ID, container.OS)
+	if err != nil {
+		return err
+	}
+	metadata, err := rwLayer.Metadata()
+	if err != nil {
+		return err
+	}
+	rwLayerDir, ok := metadata["UpperDir"]
+	if !ok {
+		return fmt.Errorf("Could not find `UpperDir` in container (%s) read-write layer metadata (%s)", name, rwLayer.Name())
+	}
+
+	err = daemon.containerd.CreateCheckpoint(context.Background(), container.ID, checkpointDir, config.Exit, config.PreDump, config.LazyMigration, config.PageServer, rwLayerDir)
 	if err != nil {
 		os.RemoveAll(checkpointDir)
 		return fmt.Errorf("Cannot checkpoint container %s: %s", name, err)

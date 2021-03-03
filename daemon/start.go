@@ -2,7 +2,11 @@ package daemon // import "github.com/docker/docker/daemon"
 
 import (
 	"context"
+	"fmt"
+	"os/exec"
+	"path/filepath"
 	"runtime"
+	"syscall"
 	"time"
 
 	"github.com/docker/docker/api/types"
@@ -194,9 +198,57 @@ func (daemon *Daemon) containerStart(container *container.Container, checkpoint 
 		}
 	}
 
+	// Find out read-write layer location of container
+	rwLayerDir := ""
+	if checkpointDir != "" {
+		rwLayer, err := daemon.imageService.GetLayerByID(container.ID, container.OS)
+		if err != nil {
+			return err
+		}
+		metadata, err := rwLayer.Metadata()
+		if err != nil {
+			return err
+		}
+		ok := true
+		rwLayerDir, ok = metadata["UpperDir"]
+		if !ok {
+			return fmt.Errorf("Could not find `UpperDir` in container (%s) read-write layer metadata (%s)", container.Name, rwLayer.Name())
+		}
+	}
+
+	if rwLayerDir != "" {
+		archiveOrigin := filepath.Join(checkpointDir, "rwlayer.tar.gz")
+		cmd := exec.Command("tar", []string{"--strip-components", "1", "-xvf", archiveOrigin, "-C", rwLayerDir}...)
+
+		if cerr := cmd.Start(); cerr != nil {
+			logrus.Error(errors.Wrap(cerr, "Failed to start `tar` command"))
+		} else {
+			if cerr := cmd.Wait(); cerr != nil {
+				if exiterr, ok := err.(*exec.ExitError); ok {
+					if status, ok := exiterr.Sys().(syscall.WaitStatus); ok {
+						logrus.Error(errors.Wrap(cerr,
+							fmt.Sprintf("`tar` exited with status %d", status.ExitStatus())))
+					}
+				} else {
+					logrus.Error(errors.Wrap(cerr, fmt.Sprintf("`tar` cmd.Wait: %v", err)))
+				}
+			}
+		}
+
+		// Remount container
+		if err := daemon.conditionalUnmountOnCleanup(container); err != nil {
+			return err
+		}
+		if err := daemon.conditionalMountOnStart(container); err != nil {
+			return err
+		}
+
+		rwLayerDir = ""
+	}
+
 	// TODO(mlaventure): we need to specify checkpoint options here
 	pid, err := daemon.containerd.Start(context.Background(), container.ID, checkpointDir,
-		lazyMigration, pageServer,
+		lazyMigration, pageServer, rwLayerDir,
 		container.StreamConfig.Stdin() != nil || container.Config.Tty,
 		container.InitializeStdio)
 	if err != nil {

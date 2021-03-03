@@ -67,6 +67,6 @@ func (c *MockContainerdClient) Status(ctx context.Context, containerID string) (
 func (c *MockContainerdClient) UpdateResources(ctx context.Context, containerID string, resources *libcontainerdtypes.Resources) error {
 	return nil
 }
-func (c *MockContainerdClient) CreateCheckpoint(ctx context.Context, containerID, checkpointDir string, exit, preDump bool, lazyMigration bool, pageServer string) error {
+func (c *MockContainerdClient) CreateCheckpoint(ctx context.Context, containerID, checkpointDir string, exit, preDump bool, lazyMigration bool, pageServer string, rwLayerDir string) error {
 	return nil
 }

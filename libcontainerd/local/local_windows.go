@@ -189,9 +189,9 @@ func (c *client) Create(_ context.Context, id string, spec *specs.Spec, shim str
 func (c *client) createWindows(id string, spec *specs.Spec, runtimeOptions interface{}) error {
 	logger := c.logger.WithField("container", id)
 	configuration := &hcsshim.ContainerConfig{
-		SystemType:              "Container",
-		Name:                    id,
-		Owner:                   defaultOwner,
+		SystemType: "Container",
+		Name:       id,
+		Owner:      defaultOwner,
 		IgnoreFlushesDuringBoot: spec.Windows.IgnoreFlushesDuringBoot,
 		HostName:                spec.Hostname,
 		HvPartition:             false,
@@ -388,11 +388,11 @@ func (c *client) createLinux(id string, spec *specs.Spec, runtimeOptions interfa
 	}
 
 	configuration := &hcsshim.ContainerConfig{
-		HvPartition:                 true,
-		Name:                        id,
-		SystemType:                  "container",
-		ContainerType:               "linux",
-		Owner:                       defaultOwner,
+		HvPartition:   true,
+		Name:          id,
+		SystemType:    "container",
+		ContainerType: "linux",
+		Owner:         defaultOwner,
 		TerminateOnLastHandleClosed: true,
 		HvRuntime: &hcsshim.HvRuntime{
 			ImagePath:           lcowConfig.KirdPath,
@@ -1230,7 +1230,7 @@ func (c *client) UpdateResources(ctx context.Context, containerID string, resour
 	return nil
 }
 
-func (c *client) CreateCheckpoint(ctx context.Context, containerID, checkpointDir string, exit bool, preDump bool, lazyMigration bool, pageServer string) error {
+func (c *client) CreateCheckpoint(ctx context.Context, containerID, checkpointDir string, exit bool, preDump bool, lazyMigration bool, pageServer string, rwLayerDir string) error {
 	return errors.New("Windows: Containers do not support checkpoints")
 }
 
