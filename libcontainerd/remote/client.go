@@ -244,11 +244,8 @@ func (c *client) Start(ctx context.Context, id, checkpointDir string, lazyMigrat
 				opts.IoGid = uint32(gid)
 				opts.LazyMigration = lazyMigration
 				opts.CriuPageServer = pageServer
-<<<<<<< HEAD
 				opts.CriuImagePath = checkpointDir
-=======
 				opts.RwLayerDir = ""
->>>>>>> 40be4c325e... Introduce read_write layer persistance to checkpoints
 				info.Options = &opts
 			} else {
 				info.Options = &runctypes.CreateOptions{
@@ -257,11 +254,8 @@ func (c *client) Start(ctx context.Context, id, checkpointDir string, lazyMigrat
 					NoPivotRoot:   os.Getenv("DOCKER_RAMDISK") != "",
 					LazyMigration: lazyMigration,
 					PageServer:    pageServer,
-<<<<<<< HEAD
 					CriuImagePath: checkpointDir,
-=======
 					RwLayerDir:    "",
->>>>>>> 40be4c325e... Introduce read_write layer persistance to checkpoints
 				}
 			}
 			return nil

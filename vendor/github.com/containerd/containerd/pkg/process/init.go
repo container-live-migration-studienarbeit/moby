@@ -24,18 +24,24 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
+	"github.com/checkpoint-restore/go-criu/stats"
 	"github.com/containerd/console"
 	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/mount"
 	"github.com/containerd/containerd/pkg/stdio"
+	"github.com/containerd/containerd/runtime/v2/runc/options"
 	"github.com/containerd/fifo"
 	runc "github.com/containerd/go-runc"
+	"github.com/containerd/typeurl"
 	google_protobuf "github.com/gogo/protobuf/types"
+	"github.com/golang/protobuf/proto"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/pkg/errors"
 	"golang.org/x/sys/unix"
@@ -157,7 +163,7 @@ func (p *Init) Create(ctx context.Context, r *CreateConfig) error {
 		if err != nil {
 			return errors.Wrap(err, "failed to retrieve console master")
 		}
-		console, err = p.Platform.CopyConsole(ctx, console, r.Stdin, r.Stdout, r.Stderr, &p.wg)
+		console, err = p.Platform.CopyConsole(ctx, console, p.id, r.Stdin, r.Stdout, r.Stderr, &p.wg)
 		if err != nil {
 			return errors.Wrap(err, "failed to start console copy")
 		}
@@ -186,11 +192,30 @@ func (p *Init) openStdin(path string) error {
 }
 
 func (p *Init) createCheckpointedState(r *CreateConfig, pidFile *pidFile) error {
+	var lazyMigration bool
+	var pageServer string
+	var rwLayerDir string
+	if r.Runtime == "runc" {
+		v, err := typeurl.UnmarshalAny(r.Options)
+		if err != nil {
+			return err
+		}
+		opts, ok := v.(*options.Options)
+		if !ok {
+			return fmt.Errorf("invalid task create option for %s", r.Runtime)
+		}
+		pageServer = opts.CriuPageServer
+		lazyMigration = opts.LazyMigration
+		rwLayerDir = opts.RwLayerDir
+	}
 	opts := &runc.RestoreOpts{
 		CheckpointOpts: runc.CheckpointOpts{
-			ImagePath:  r.Checkpoint,
-			WorkDir:    p.CriuWorkPath,
-			ParentPath: r.ParentCheckpoint,
+			ImagePath:      r.Checkpoint,
+			WorkDir:        p.CriuWorkPath,
+			ParentPath:     r.ParentCheckpoint,
+			LazyPages:      lazyMigration,
+			CriuPageServer: pageServer,
+			RWLayerDir:     rwLayerDir,
 		},
 		PidFile:     pidFile.Path(),
 		IO:          p.io.IO(),
@@ -411,6 +436,29 @@ func (p *Init) exec(ctx context.Context, path string, r *ExecConfig) (Process, e
 	return e, nil
 }
 
+func criuGetDumpStats(imgDir *os.File) (*stats.DumpStatsEntry, error) {
+	stf, err := os.Open(imgDir.Name() + "/stats-dump")
+	if err != nil {
+		return nil, err
+	}
+	defer stf.Close()
+
+	buf := make([]byte, 2*4096)
+	sz, err := stf.Read(buf)
+	if err != nil {
+		return nil, err
+	}
+
+	st := &stats.StatsEntry{}
+	// Skip 2 magic values and entry size
+	err = proto.Unmarshal(buf[12:sz], st)
+	if err != nil {
+		return nil, err
+	}
+
+	return st.GetDump(), nil
+}
+
 // Checkpoint the init process
 func (p *Init) Checkpoint(ctx context.Context, r *CheckpointConfig) error {
 	p.mu.Lock()
@@ -419,8 +467,50 @@ func (p *Init) Checkpoint(ctx context.Context, r *CheckpointConfig) error {
 	return p.initState.Checkpoint(ctx, r)
 }
 
+// NOTE: Could also be a member method
+func runCheckpoint(ctx context.Context, r *CheckpointConfig, p *Init, actions *[]runc.CheckpointAction, runcOptions *runc.CheckpointOpts, work string, dumpRWLayerDir bool) error {
+	if err := p.runtime.Checkpoint(ctx, p.id, runcOptions, *actions...); err != nil {
+		// Copy criu logs
+		dumpLog := filepath.Join(p.Bundle, "criu-dump.log")
+		if cerr := copyFile(dumpLog, filepath.Join(work, "dump.log")); cerr != nil {
+			log.G(ctx).Error(cerr)
+		}
+		// Copy criu statistics
+		statsDump := filepath.Join(p.Bundle, "stats-dump")
+		if cerr := copyFile(statsDump, filepath.Join(work, "stats-dump")); cerr != nil {
+			log.G(ctx).Error(cerr)
+			return cerr
+		}
+		// Copy container changes to fs (e.g. `diff/` for overlay2 fs)
+		if dumpRWLayerDir && r.RWLayerDir != "" {
+			archiveDest := filepath.Join(p.Bundle, "rwlayer.tar.gz")
+			cmd := exec.Command("tar", []string{"--strip-components", "1", "-xvf", archiveDest, "-C", r.RWLayerDir}...)
+
+			if cerr := cmd.Start(); cerr != nil {
+				log.G(ctx).Error(errors.Wrap(cerr, "Failed to start `tar` command"))
+			} else {
+				if cerr := cmd.Wait(); cerr != nil {
+					if exiterr, ok := err.(*exec.ExitError); ok {
+						if status, ok := exiterr.Sys().(syscall.WaitStatus); ok {
+							log.G(ctx).Error(errors.Wrap(cerr,
+								fmt.Sprintf("`tar` exited with status %d", status.ExitStatus())))
+						}
+					} else {
+						log.G(ctx).Error(errors.Wrap(cerr, fmt.Sprintf("`tar` cmd.Wait: %v", err)))
+					}
+				}
+			}
+		}
+
+		return fmt.Errorf("%s path= %s", criuError(err), dumpLog)
+	}
+	return nil
+}
+
 func (p *Init) checkpoint(ctx context.Context, r *CheckpointConfig) error {
 	var actions []runc.CheckpointAction
+
+	actionsWithPredump := append(actions, runc.PreDump)
 	if !r.Exit {
 		actions = append(actions, runc.LeaveRunning)
 	}
@@ -430,20 +520,87 @@ func (p *Init) checkpoint(ctx context.Context, r *CheckpointConfig) error {
 		work = filepath.Join(p.WorkDir, "criu-work")
 		defer os.RemoveAll(work)
 	}
-	if err := p.runtime.Checkpoint(ctx, p.id, &runc.CheckpointOpts{
-		WorkDir:                  work,
-		ImagePath:                r.Path,
-		AllowOpenTCP:             r.AllowOpenTCP,
-		AllowExternalUnixSockets: r.AllowExternalUnixSockets,
-		AllowTerminal:            r.AllowTerminal,
-		FileLocks:                r.FileLocks,
-		EmptyNamespaces:          r.EmptyNamespaces,
-	}, actions...); err != nil {
-		dumpLog := filepath.Join(p.Bundle, "criu-dump.log")
-		if cerr := copyFile(dumpLog, filepath.Join(work, "dump.log")); cerr != nil {
-			log.G(ctx).Error(err)
+	var statusFileWrite *os.File
+	var statusFileRead *os.File
+	if r.LazyMigration {
+		var err error
+		statusFileRead, statusFileWrite, err = os.Pipe()
+		if err != nil {
+			return err
 		}
-		return fmt.Errorf("%s path= %s", criuError(err), dumpLog)
+	}
+
+	if !r.PreDump {
+		runcOptions := runc.CheckpointOpts{
+			WorkDir:                  work,
+			ImagePath:                r.Path,
+			AllowOpenTCP:             r.AllowOpenTCP,
+			AllowExternalUnixSockets: r.AllowExternalUnixSockets,
+			AllowTerminal:            r.AllowTerminal,
+			FileLocks:                r.FileLocks,
+			EmptyNamespaces:          r.EmptyNamespaces,
+			CriuPageServer:           r.CriuPageServer,
+			LazyPages:                r.LazyMigration,
+			RWLayerDir:               r.RWLayerDir,
+			StatusFile:               statusFileWrite,
+		}
+		if statusFileWrite != nil {
+			// Run checkpoint asynch so we can return once the statusFile gets updated
+			go func() {
+				runCheckpoint(ctx, r, p, &actions, &runcOptions, work, true)
+				_, _ = statusFileWrite.Write([]byte{0})
+			}()
+		} else {
+			runCheckpoint(ctx, r, p, &actions, &runcOptions, work, true)
+		}
+	} else {
+		runcOptions := runc.CheckpointOpts{
+			WorkDir:                  work,
+			AllowOpenTCP:             r.AllowOpenTCP,
+			AllowExternalUnixSockets: r.AllowExternalUnixSockets,
+			AllowTerminal:            r.AllowTerminal,
+			FileLocks:                r.FileLocks,
+			EmptyNamespaces:          r.EmptyNamespaces,
+		}
+		const MAX_PRE_DUMPS = 10
+		i := 0
+		var dumpStats *stats.DumpStatsEntry = nil
+		// TODO: skip in case of increasing pages to write
+		for ; (dumpStats == nil || dumpStats.GetPagesWritten() > uint64(64)) && i < MAX_PRE_DUMPS; i++ {
+			runcOptions.ImagePath = filepath.Join(r.Path, string(i+48))
+
+			// NOTE: Do not include rwLayer in iterative dump
+			runCheckpoint(ctx, r, p, &actionsWithPredump, &runcOptions, work, false)
+
+			runcOptions.ParentPath = "../" + string(i+48)
+			workDir, _ := os.Open(work)
+			dumpStats, _ = criuGetDumpStats(workDir)
+		}
+		runcOptions.ImagePath = r.Path
+		runcOptions.ParentPath = string(i + 48)
+		runcOptions.CriuPageServer = r.CriuPageServer
+		runcOptions.LazyPages = r.LazyMigration
+		runcOptions.RWLayerDir = r.RWLayerDir
+		runcOptions.StatusFile = statusFileWrite
+		// final dump
+		if statusFileWrite != nil {
+			// Run checkpoint asynch so we can return once the statusFile gets updated
+			go func() {
+				runCheckpoint(ctx, r, p, &actions, &runcOptions, work, true)
+				_, _ = statusFileWrite.Write([]byte{0})
+			}()
+		} else {
+			runCheckpoint(ctx, r, p, &actions, &runcOptions, work, true)
+		}
+	}
+	if statusFileRead != nil {
+		// wait for an update in the status file in case of lazy migration
+		b := make([]byte, 1)
+		readBytes, err := statusFileRead.Read(b)
+		if readBytes == 1 {
+			return nil
+		}
+		return err
 	}
 	return nil
 }

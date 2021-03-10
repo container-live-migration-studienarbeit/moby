@@ -62,5 +62,9 @@ type CheckpointConfig struct {
 	AllowExternalUnixSockets bool
 	AllowTerminal            bool
 	FileLocks                bool
+	PreDump                  bool
+	LazyMigration            bool
+	CriuPageServer           string
+	RWLayerDir               string
 	EmptyNamespaces          []string
 }
